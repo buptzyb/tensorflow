@@ -177,9 +177,11 @@ class ExecutorImpl : public Executor {
     // executor uses this flag to optimize graph execution, for example
     // by "inlining" inexpensive kernels.
     bool IsExpensive(const NodeItem& node) const {
-      return is_expensive_[node.node_id] &&
-             (cost_estimates_[node.node_id].load(std::memory_order_relaxed) >
-              kOpIsExpensiveThresholdCycles);
+      return (is_expensive_[node.node_id] &&
+              (cost_estimates_[node.node_id].load(std::memory_order_relaxed) >
+               kOpIsExpensiveThresholdCycles)) ||
+             (force_expensive_ops.find(node.kernel->type_string()) !=
+              force_expensive_ops.end());
     }
 
     // Returns the value of kernel->IsExpensive().
@@ -211,6 +213,12 @@ class ExecutorImpl : public Executor {
     static constexpr uint64 kInitialCostEstimateCycles = 100 * 1000 * 1000;
     static constexpr uint64 kOpIsExpensiveThresholdCycles = 8000;
     static constexpr uint64 kCostDecay = 10;
+
+    const std::unordered_set<std::string> force_expensive_ops = {
+        "Const",     "_Arg",           "_Retval",
+        "_Send",     "_Recv",          "_HostSend",
+        "_HostRecv", "ReadVariableOp", "AssignVariableOp",
+        "Identity",  "Shape"};
 
     std::vector<bool> is_expensive_;
     // std::unique_ptr<std::atomic<bool>[]> is_expensive_;
