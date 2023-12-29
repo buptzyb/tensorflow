@@ -1876,6 +1876,29 @@ Status BaseGPUDeviceFactory::CreateGPUDevice(
     TF_RETURN_IF_ERROR(gpu_device->Init(options));
 #endif  // TF_GPU_USE_PJRT
     gpu_allocators[i]->SetStreamAndPreallocateMemory(gpu_device->GetStream());
+    GPUProcessState* process_state = GPUProcessState::singleton();
+    static const int64 offload_gpu_level = [] {
+      int64 offload_gpu_level;
+      TF_CHECK_OK(ReadInt64FromEnvVar("TF_OFFLOAD_GPU_LEVEL",
+                                      /*default_val=*/0, &offload_gpu_level));
+      return offload_gpu_level;
+    }();
+    if (offload_gpu_level > 0) {
+      Allocator* offload_allocator =
+          process_state->GetGpuOffloadAllocator(numa_node, i);
+      offload_allocator->SetStreamAndPreallocateMemory(gpu_device->GetStream());
+    }
+    static const int64 offload_cpu_level = [] {
+      int64 offload_cpu_level;
+      TF_CHECK_OK(ReadInt64FromEnvVar("TF_OFFLOAD_CPU_LEVEL",
+                                      /*default_val=*/0, &offload_cpu_level));
+      return offload_cpu_level;
+    }();
+    if (offload_cpu_level > 0) {
+      Allocator* offload_allocator =
+          process_state->GetGpuOffloadHostAllocator(numa_node, i);
+      offload_allocator->SetStreamAndPreallocateMemory(gpu_device->GetStream());
+    }
     devices->push_back(std::move(gpu_device));
   }
 

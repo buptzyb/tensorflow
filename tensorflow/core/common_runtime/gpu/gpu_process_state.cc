@@ -38,6 +38,7 @@ limitations under the License.
 #include "tensorflow/core/common_runtime/gpu/gpu_cudamalloc_allocator.h"
 #include "tensorflow/core/common_runtime/gpu/gpu_debug_allocator.h"
 #include "tensorflow/core/common_runtime/gpu/gpu_id_manager.h"
+#include "tensorflow/core/common_runtime/gpu/gpu_offload_allocator.h"
 #include "tensorflow/core/common_runtime/gpu/gpu_virtual_mem_allocator.h"
 #include "tensorflow/core/common_runtime/pool_allocator.h"
 #include "tensorflow/core/common_runtime/shared_counter.h"
@@ -369,6 +370,125 @@ SharedCounter* GPUProcessState::GPUAllocatorCounter(
 #endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
 }
 
+se::StreamExecutor* GPUProcessState::FindFirstValidStreamExecutorLocked(
+    int stream_id) const {
+  // This search isn't super clean, and it would be nice to use a
+  // better source of information about which executor to use.  For
+  // example, process_state could maybe save the first stream executor
+  // it knows is valid.
+  se::StreamExecutor* se = nullptr;
+  for (int i = 0; i < static_cast<int>(gpu_allocators_.size()); ++i) {
+#ifdef TF_GPU_USE_PJRT
+    if (gpu_allocators_[i][stream_id].allocator_not_owned != nullptr) {
+#else
+    if (gpu_allocators_[i][stream_id].allocator != nullptr) {
+#endif  // TF_GPU_USE_PJRT
+      se = se::DeviceIdUtil::ExecutorForTfDeviceId(
+                DEVICE_GPU, se::GPUMachineManager(), tsl::TfDeviceId(i), stream_id)
+                .value();
+      break;
+    }
+  }
+  return se;
+}
+
+Allocator* GPUProcessState::GetGpuOffloadAllocator(int numa_node,
+                                                   int stream_id) {
+  if (!HasGPUDevice() ||
+      !process_state_->ProcessState::FLAGS_brain_mem_reg_gpu_dma) {
+    return process_state_->GetCPUAllocator(numa_node);
+  }
+  if (numa_node == port::kNUMANoAffinity) {
+    numa_node = 0;
+  }
+  {
+    // Here we optimize the most common use case where gpu_offload_allocators_
+    // have already been populated and since we're only reading
+    // these vectors, we can get by with a shared lock. In the slower case,
+    // we take a unique lock and populate these vectors.
+    tf_shared_lock lock(mu_);
+
+    if (process_state_->ProcessState::FLAGS_brain_gpu_record_mem_types &&
+        !gpu_offload_allocators_.empty() &&
+        static_cast<int>(gpu_offload_allocators_[0].size()) > stream_id &&
+        gpu_offload_allocators_[0][stream_id].recording_allocator != nullptr) {
+      return gpu_offload_allocators_[0][stream_id].recording_allocator.get();
+    }
+    if (static_cast<int>(gpu_offload_allocators_.size()) > numa_node &&
+        static_cast<int>(gpu_offload_allocators_[0].size()) > stream_id &&
+        gpu_offload_allocators_[0][stream_id].allocator != nullptr) {
+      // TODO(benbarsdell): Shouldn't these all be [numa_node] not [0]?
+      return gpu_offload_allocators_[0][stream_id].allocator.get();
+    }
+  }
+
+  mutex_lock lock(mu_);
+  // Find the first valid StreamExecutor to request CUDA offload memory
+  // through, since any will work.
+  se::StreamExecutor* se = FindFirstValidStreamExecutorLocked(stream_id);
+
+  while (static_cast<int>(gpu_offload_allocators_.size()) <= numa_node) {
+    gpu_offload_allocators_.push_back({});
+  }
+  for (int numa_idx = 0; numa_idx <= numa_node; ++numa_idx) {
+    if (static_cast<int>(gpu_offload_allocators_[numa_idx].size()) >
+            stream_id &&
+        gpu_offload_allocators_[numa_idx][stream_id].allocator != nullptr) {
+      continue;
+    }
+    int64_t offload_mem_limit_in_mb = 0;
+    TF_CHECK_OK(tsl::ReadInt64FromEnvVar("TF_OFFLOAD_BFC_IN_MB", 0,
+                                    &offload_mem_limit_in_mb));
+    Allocator* allocator;
+    if (offload_mem_limit_in_mb > 0) {
+      // Use Offloading Allocator as the sub_allocator in BFC.
+      SubAllocator* sub_allocator = new SubGpuOffloadAllocator(se, numa_idx);
+      tsl::BFCAllocator::Options allocator_opts;
+      allocator_opts.allow_growth = true;
+      int64_t gpu_offload_mem_limit = offload_mem_limit_in_mb * (1LL << 20);
+      allocator = new tsl::BFCAllocator(
+          absl::WrapUnique(sub_allocator), gpu_offload_mem_limit,
+          /*name=*/strings::StrCat("gpu_offload_", stream_id, "_bfc"),
+          allocator_opts);
+    } else {
+      // Use Offloading Allocator directly.
+      allocator = new GpuOffloadAllocator(se, numa_idx);
+    }
+
+    if (LogMemory::IsEnabled() && !allocator->TracksAllocationSizes()) {
+      // Wrap the allocator to track allocation ids for better logging
+      // at the cost of performance.
+      allocator = new TrackingAllocator(allocator, true);
+    }
+    while (static_cast<int>(gpu_offload_allocators_[numa_idx].size()) <=
+           stream_id) {
+      gpu_offload_allocators_[numa_idx].push_back({});
+    }
+    gpu_offload_allocators_[numa_idx][stream_id] = {
+        std::unique_ptr<Allocator>(allocator),
+        std::unique_ptr<SharedCounter>(nullptr), nullptr, nullptr,
+        std::unique_ptr<Allocator>(nullptr)};
+    AllocatorParts& allocator_parts =
+        gpu_offload_allocators_[numa_idx][stream_id];
+    if (process_state_->ProcessState::FLAGS_brain_gpu_record_mem_types) {
+      ProcessState::MemDesc md;
+      md.loc = ProcessState::MemDesc::CPU;
+      md.dev_index = 0;
+      md.gpu_registered = true;
+      md.nic_registered = false;
+      allocator_parts.recording_allocator.reset(
+          new internal::RecordingAllocator(&process_state_->mem_desc_map_,
+                                           allocator_parts.allocator.get(), md,
+                                           &mu_));
+    }
+  }
+  if (process_state_->ProcessState::FLAGS_brain_gpu_record_mem_types) {
+    return gpu_offload_allocators_[0][stream_id].recording_allocator.get();
+  } else {
+    return gpu_offload_allocators_[0][stream_id].allocator.get();
+  }
+}
+
 Allocator* GPUProcessState::GetGpuHostAllocator(const GPUOptions& options,
                                                 int numa_node, int stream_id) {
   CHECK(process_state_);
@@ -406,27 +526,7 @@ Allocator* GPUProcessState::GetGpuHostAllocator(const GPUOptions& options,
   mutex_lock lock(mu_);
   // Find the first valid StreamExecutor to request CUDA or ROCm host memory
   // through, since any will work.
-  //
-  // This search isn't super clean, and it would be nice to use a
-  // better source of information about which executor to use.  For
-  // example, process_state could maybe save the first stream executor
-  // it knows is valid.
-  se::StreamExecutor* se = nullptr;
-  for (int i = 0; i < static_cast<int>(gpu_allocators_.size()); ++i) {
-    for (int j = 0; j < static_cast<int>(gpu_allocators_[i].size()); ++j) {
-#ifdef TF_GPU_USE_PJRT
-      if (gpu_allocators_[i][j].allocator_not_owned != nullptr) {
-#else
-      if (gpu_allocators_[i][j].allocator != nullptr) {
-#endif  // TF_GPU_USE_PJRT
-        se = se::DeviceIdUtil::ExecutorForTfDeviceId(
-                 DEVICE_GPU, se::GPUMachineManager(), tsl::TfDeviceId(i), j)
-                 .value();
-        break;
-      }
-    }
-    if (se != nullptr) break;
-  }
+  se::StreamExecutor* se = FindFirstValidStreamExecutorLocked(stream_id);
 
   CHECK_NE(nullptr, se);
 
@@ -527,6 +627,103 @@ Allocator* GPUProcessState::GetGpuHostAllocator(const GPUOptions& options,
 #else
     return gpu_host_allocators_[0][stream_id].allocator.get();
 #endif  // TF_GPU_USE_PJRT
+  }
+}
+
+Allocator* GPUProcessState::GetGpuOffloadHostAllocator(int numa_node,
+                                                       int stream_id) {
+  if (!HasGPUDevice() ||
+      !process_state_->ProcessState::FLAGS_brain_mem_reg_gpu_dma) {
+    return process_state_->GetCPUAllocator(numa_node);
+  }
+  if (numa_node == port::kNUMANoAffinity) {
+    numa_node = 0;
+  }
+  {
+    // Here we optimize the most common use case where gpu_offload_host_allocators_
+    // have already been populated and since we're only reading
+    // these vectors, we can get by with a shared lock. In the slower case,
+    // we take a unique lock and populate these vectors.
+    tf_shared_lock lock(mu_);
+
+    if (process_state_->ProcessState::FLAGS_brain_gpu_record_mem_types &&
+        !gpu_offload_host_allocators_.empty() &&
+        static_cast<int>(gpu_offload_host_allocators_[0].size()) > stream_id &&
+        gpu_offload_host_allocators_[0][stream_id].recording_allocator != nullptr) {
+      return gpu_offload_host_allocators_[0][stream_id].recording_allocator.get();
+    }
+    if (static_cast<int>(gpu_offload_host_allocators_.size()) > numa_node &&
+        static_cast<int>(gpu_offload_host_allocators_[0].size()) > stream_id &&
+        gpu_offload_host_allocators_[0][stream_id].allocator != nullptr) {
+      // TODO(benbarsdell): Shouldn't these all be [numa_node] not [0]?
+      return gpu_offload_host_allocators_[0][stream_id].allocator.get();
+    }
+  }
+
+  mutex_lock lock(mu_);
+  // Find the first valid StreamExecutor to request CUDA offload memory
+  // through, since any will work.
+  se::StreamExecutor* se = FindFirstValidStreamExecutorLocked(stream_id);
+
+  while (static_cast<int>(gpu_offload_host_allocators_.size()) <= numa_node) {
+    gpu_offload_host_allocators_.push_back({});
+  }
+  for (int numa_idx = 0; numa_idx <= numa_node; ++numa_idx) {
+    if (static_cast<int>(gpu_offload_host_allocators_[numa_idx].size()) >
+            stream_id &&
+        gpu_offload_host_allocators_[numa_idx][stream_id].allocator != nullptr) {
+      continue;
+    }
+    int64_t offload_mem_limit_in_mb = 0;
+    TF_CHECK_OK(tsl::ReadInt64FromEnvVar("TF_OFFLOAD_BFC_IN_MB", 0,
+                                    &offload_mem_limit_in_mb));
+    Allocator* allocator;
+    if (offload_mem_limit_in_mb > 0) {
+      // Use Offloading Allocator as the sub_allocator in BFC.
+      SubAllocator* sub_allocator = new SubGpuOffloadAllocator(se, numa_idx, true);
+      tsl::BFCAllocator::Options allocator_opts;
+      allocator_opts.allow_growth = true;
+      int64_t gpu_offload_mem_limit = offload_mem_limit_in_mb * (1LL << 20);
+      allocator = new tsl::BFCAllocator(
+          absl::WrapUnique(sub_allocator), gpu_offload_mem_limit,
+          /*name=*/strings::StrCat("gpu_offload_", stream_id, "_bfc"),
+          allocator_opts);
+    } else {
+      // Use Offloading Allocator directly.
+      allocator = new GpuOffloadAllocator(se, numa_idx, true);
+    }
+
+    if (LogMemory::IsEnabled() && !allocator->TracksAllocationSizes()) {
+      // Wrap the allocator to track allocation ids for better logging
+      // at the cost of performance.
+      allocator = new TrackingAllocator(allocator, true);
+    }
+    while (static_cast<int>(gpu_offload_host_allocators_[numa_idx].size()) <=
+           stream_id) {
+      gpu_offload_host_allocators_[numa_idx].push_back({});
+    }
+    gpu_offload_host_allocators_[numa_idx][stream_id] = {
+        std::unique_ptr<Allocator>(allocator),
+        std::unique_ptr<SharedCounter>(nullptr), nullptr, nullptr,
+        std::unique_ptr<Allocator>(nullptr)};
+    AllocatorParts& allocator_parts =
+        gpu_offload_host_allocators_[numa_idx][stream_id];
+    if (process_state_->ProcessState::FLAGS_brain_gpu_record_mem_types) {
+      ProcessState::MemDesc md;
+      md.loc = ProcessState::MemDesc::CPU;
+      md.dev_index = 0;
+      md.gpu_registered = true;
+      md.nic_registered = false;
+      allocator_parts.recording_allocator.reset(
+          new internal::RecordingAllocator(&process_state_->mem_desc_map_,
+                                           allocator_parts.allocator.get(), md,
+                                           &mu_));
+    }
+  }
+  if (process_state_->ProcessState::FLAGS_brain_gpu_record_mem_types) {
+    return gpu_offload_host_allocators_[0][stream_id].recording_allocator.get();
+  } else {
+    return gpu_offload_host_allocators_[0][stream_id].allocator.get();
   }
 }
 

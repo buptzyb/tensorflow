@@ -27,6 +27,27 @@ limitations under the License.
 
 namespace tensorflow {
 
+static const bool offload_all = [] {
+  bool offload_all;
+  TF_CHECK_OK(ReadBoolFromEnvVar("TF_OFFLOAD_ALL",
+                                 /*default_val=*/false, &offload_all));
+  return offload_all;
+}();
+
+static const int64 offload_cpu_level = [] {
+  int64 offload_cpu_level;
+  TF_CHECK_OK(ReadInt64FromEnvVar("TF_OFFLOAD_CPU_LEVEL",
+                                  /*default_val=*/0, &offload_cpu_level));
+  return offload_cpu_level;
+}();
+
+static const int64 offload_gpu_level = [] {
+  int64 offload_gpu_level;
+  TF_CHECK_OK(ReadInt64FromEnvVar("TF_OFFLOAD_GPU_LEVEL",
+                                  /*default_val=*/0, &offload_gpu_level));
+  return offload_gpu_level;
+}();
+
 class GPUDevice : public BaseGPUDevice {
  public:
   GPUDevice(const SessionOptions& options, const string& name,
@@ -48,14 +69,21 @@ class GPUDevice : public BaseGPUDevice {
 
   Allocator* GetAllocator(AllocatorAttributes attr) override {
     CHECK(cpu_allocator_) << "bad place 1";
+    GPUProcessState* ps = GPUProcessState::singleton();
     if (attr.on_host()) {
       if (attr.gpu_compatible() || force_gpu_compatible_) {
-        GPUProcessState* ps = GPUProcessState::singleton();
-        return ps->GetGpuHostAllocator(
-            gpu_options_, 0, use_per_stream_host_allocator_ ? stream_id_ : 0);
+        if (offload_cpu_level > 0) {
+          return ps->GetGpuOffloadHostAllocator(
+              0, use_per_stream_host_allocator_ ? stream_id_ : 0);
+        } else {
+          return ps->GetGpuHostAllocator(
+              gpu_options_, 0, use_per_stream_host_allocator_ ? stream_id_ : 0);
+        }
       } else {
         return cpu_allocator_;
       }
+    } else if (offload_gpu_level > 0 && (offload_all || attr.gpu_offload())) {
+      return ps->GetGpuOffloadAllocator(0, stream_id_);
     } else {
       return gpu_allocator_;
     }
@@ -147,18 +175,17 @@ class GPUCompatibleCPUDevice : public ThreadPoolDevice {
       force_gpu_compatible_ =
           options.config.gpu_options().force_gpu_compatible();
     }
-    TF_CHECK_OK(ReadBoolFromEnvVar("TF_PER_STREAM_HOST_ALLOCATOR",
-                                   /*default_val=*/false,
-                                   &use_per_stream_host_allocator_));
   }
   ~GPUCompatibleCPUDevice() override {}
 
   Allocator* GetAllocator(AllocatorAttributes attr) override {
     GPUProcessState* ps = GPUProcessState::singleton();
     if (attr.gpu_compatible() || force_gpu_compatible_) {
-      return ps->GetGpuHostAllocator(
-          gpu_options_, numa_node_,
-          use_per_stream_host_allocator_ ? stream_id_ : 0);
+      if (offload_cpu_level > 0) {
+        return ps->GetGpuOffloadHostAllocator(numa_node_, stream_id_);
+      } else {
+        return ps->GetGpuHostAllocator(gpu_options_, numa_node_, stream_id_);
+      }
     } else {
       // Call the parent's implementation.
       return ThreadPoolDevice::GetAllocator(attr);
@@ -169,7 +196,6 @@ class GPUCompatibleCPUDevice : public ThreadPoolDevice {
   bool force_gpu_compatible_ = false;
   int numa_node_;
   GPUOptions gpu_options_;
-  bool use_per_stream_host_allocator_ = false;
 };
 
 //------------------------------------------------------------------------------

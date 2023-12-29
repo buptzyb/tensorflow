@@ -117,6 +117,7 @@ enum class AllocatorMemoryType {
   kDevice = 1,        // Memory on device.
   kHostPageable = 2,  // Memory on host and it is pagable.
   kHostPinned = 3,    // Memory on host and it is pinned.
+  kMigratable = 4,    // Memory automatically page-migrated between host/device.
 };
 
 // Allocator is an abstract interface for allocating and deallocating
@@ -332,6 +333,8 @@ struct AllocatorAttributes {
   bool gpu_compatible() const { return value & (0x1 << 2); }
   void set_use_pjrt_allocator(bool v) { value |= (static_cast<int>(v) << 3); }
   bool use_pjrt_allocator() const { return value & (0x1 << 3); }
+  void set_gpu_offload(bool v) { value |= (static_cast<int>(v) << 4); }
+  bool gpu_offload() const { return value & (0x1 << 4); }
   void Merge(AllocatorAttributes other) {
     value |= other.value;
     if (scope_id != other.scope_id) {
@@ -417,6 +420,8 @@ class SubAllocator {
   virtual AllocatorMemoryType GetMemoryType() const {
     return AllocatorMemoryType::kUnknown;
   }
+
+  virtual void SetStreamAndPreallocateMemory(void* stream) {}
 
  protected:
   // Implementation of Alloc() method must call this on newly allocated

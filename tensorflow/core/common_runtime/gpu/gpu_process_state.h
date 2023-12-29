@@ -37,6 +37,10 @@ limitations under the License.
 #include "tensorflow/core/protobuf/config.pb.h"
 #include "tensorflow/tsl/framework/device_id.h"
 
+namespace stream_executor {
+class StreamExecutor;
+};
+
 namespace tensorflow {
 
 class GPUBFCAllocator;
@@ -121,6 +125,10 @@ class GPUProcessState {
   virtual Allocator* GetGpuHostAllocator(const GPUOptions& options,
                                          int numa_node, int stream_id = 0);
 
+  virtual Allocator* GetGpuOffloadAllocator(int numa_node, int stream_id = 0);
+
+  virtual Allocator* GetGpuOffloadHostAllocator(int numa_node, int stream_id = 0);
+
   // Registers a Visitor to be invoked on new chunks of memory allocated by the
   // SubAllocator of every GPU proximate to the specified bus.  The AllocVisitor
   // is provided with a memory pointer, a GPU id, and the size of the area it
@@ -168,6 +176,8 @@ class GPUProcessState {
     return nullptr;
   }
 
+  se::StreamExecutor* FindFirstValidStreamExecutorLocked(int stream_id) const;
+
   static GPUProcessState* instance_;
   ProcessState* process_state_;  // Not owned.
   bool gpu_device_enabled_;
@@ -198,6 +208,11 @@ class GPUProcessState {
       gpu_host_alloc_visitors_ TF_GUARDED_BY(mu_);
   std::vector<std::vector<std::vector<SubAllocator::Visitor>>>
       gpu_host_free_visitors_ TF_GUARDED_BY(mu_);
+
+  std::vector<std::vector<AllocatorParts>> gpu_offload_allocators_
+      TF_GUARDED_BY(mu_);
+  std::vector<std::vector<AllocatorParts>> gpu_offload_host_allocators_
+      TF_GUARDED_BY(mu_);
 
   std::unordered_map<int, mutex> shared_pool_lock_ TF_GUARDED_BY(mu_);
   std::unordered_map<int, int64_t> shared_pool_bytes_ TF_GUARDED_BY(mu_);

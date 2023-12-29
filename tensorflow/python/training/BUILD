@@ -61,6 +61,7 @@ py_strict_library(
         "//tensorflow/python/checkpoint:checkpoint_view",
         "//tensorflow/python/ops:sdca_ops",
         "//tensorflow/python/trackable:python_state",
+        "//tensorflow/python/training/experimental:gpu_offload",
         "//tensorflow/python/training/experimental:loss_scale_optimizer",
         "//tensorflow/python/training/experimental:mixed_precision",
         "//tensorflow/python/training/saving:saveable_object_util",

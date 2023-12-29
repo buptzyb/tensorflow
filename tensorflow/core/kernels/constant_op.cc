@@ -39,8 +39,16 @@ limitations under the License.
 #include "tensorflow/core/kernels/fill_functor.h"
 #include "tensorflow/core/platform/macros.h"
 #include "tensorflow/core/profiler/lib/scoped_memory_debug_annotation.h"
+#include "tensorflow/core/util/env_var.h"
 
 namespace tensorflow {
+
+static const bool offload_all_const = [] {
+  bool offload_all_const;
+  TF_CHECK_OK(ReadBoolFromEnvVar("TF_OFFLOAD_CONST",
+                                 /*default_val=*/false, &offload_all_const));
+  return offload_all_const;
+}();
 
 namespace {
 
@@ -78,8 +86,18 @@ ConstantOp::ConstantOp(OpKernelConstruction* ctx)
   const TensorProto* proto = nullptr;
   profiler::ScopedMemoryDebugAnnotation op_annotation(name_view().data());
   OP_REQUIRES_OK(ctx, ctx->GetAttr("value", &proto));
-  OP_REQUIRES_OK(ctx, ctx->device()->MakeTensorFromProto(
-                          *proto, AllocatorAttributes(), &tensor_));
+  AllocatorAttributes attr;
+  bool gpu_offload;
+  if (offload_all_const ||
+      (TryGetNodeAttr(ctx->def(), "_gpu_offload_outputs_enabled",
+                      &gpu_offload) &&
+       gpu_offload)) {
+    VLOG(3) << "Enabling GPU-offload for constant op kernel " << name();
+    attr.set_gpu_offload(true);
+  }
+
+  OP_REQUIRES_OK(ctx,
+                 ctx->device()->MakeTensorFromProto(*proto, attr, &tensor_));
   OP_REQUIRES(
       ctx, ctx->output_type(0) == tensor_.dtype(),
       errors::InvalidArgument("Type mismatch between value (",

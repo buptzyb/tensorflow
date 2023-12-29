@@ -819,6 +819,16 @@ Status OpKernelContext::allocate_output(int index, const TensorShape& shape,
       op_kernel().name_view().data(), step_id(), "output", type,
       [&shape]() { return shape.DebugString(); });
   auto output_tensor = std::make_unique<Tensor>();
+
+  bool gpu_offload;
+  if (TryGetNodeAttr(op_kernel().def(), "_gpu_offload_outputs_enabled",
+                     &gpu_offload) &&
+      gpu_offload) {
+    VLOG(3) << "Enabling GPU-offload for output " << index << " of kernel "
+            << params_->op_kernel->name();
+    attr.set_gpu_offload(true);
+  }
+
   Status s = allocate_tensor(type, shape, output_tensor.get(), attr);
   if (s.ok()) {
     outputs_[index] = TensorValue(output_tensor.release());

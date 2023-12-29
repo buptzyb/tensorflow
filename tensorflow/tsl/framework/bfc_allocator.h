@@ -112,6 +112,10 @@ class BFCAllocator : public Allocator {
 
   MemoryDump RecordMemoryMap();
 
+  void SetStreamAndPreallocateMemory(void* stream) override {
+    sub_allocator_->SetStreamAndPreallocateMemory(stream);
+  }
+
  private:
   struct Bin;
 

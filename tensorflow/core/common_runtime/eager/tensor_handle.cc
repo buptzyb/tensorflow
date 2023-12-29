@@ -984,7 +984,14 @@ Status TensorHandle::CopyToDevice(const EagerContext& ctx,
 
   const tensorflow::Tensor* src = nullptr;
   TF_RETURN_IF_ERROR(Tensor(&src));
-  if (is_same_device) {
+  const bool migratable =
+      src->TotalBytes() > 0 &&
+      src->GetMemoryType() == AllocatorMemoryType::kMigratable;
+  if (is_same_device || (migratable && !dst_cpu)) {
+    if (!is_same_device) {
+      VLOG(3) << "Forwarding tensor without copying because tensor is in "
+                 "migratable memory and the destination is not CPU.";
+    }
     *output = *src;
     return OkStatus();
   }

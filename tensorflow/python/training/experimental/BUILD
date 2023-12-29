@@ -145,3 +145,17 @@ cuda_py_strict_test(
         "@absl_py//absl/testing:parameterized",
     ],
 )
+
+py_library(
+    name = "gpu_offload",
+    srcs = ["gpu_offload.py"],
+    srcs_version = "PY3",
+    deps = [
+        #"//tensorflow/python:framework_ops",
+        "//tensorflow/python/framework:ops",
+        #"//tensorflow/python:util",
+        "//tensorflow/python/util:tf_export",
+        "//tensorflow/python/eager:context",
+        "//tensorflow/python/eager:def_function",
+    ],
+)

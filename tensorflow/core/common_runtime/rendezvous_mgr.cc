@@ -46,7 +46,11 @@ void SameWorkerRecvDone(const DeviceMgr* device_mgr,
       (send_args.alloc_attrs.on_host() || parsed.src.type == "CPU");
   const bool dst_host =
       (recv_args.alloc_attrs.on_host() || parsed.dst.type == "CPU");
-  if (src_host && dst_host) {
+  const bool migratable =
+      in.TotalBytes() > 0 &&
+      in.GetMemoryType() == AllocatorMemoryType::kMigratable;
+
+  if ((migratable && !dst_host) || (src_host && dst_host)) {
     if (VLOG_IS_ON(3)) {
       bool src_override =
           send_args.alloc_attrs.on_host() && !(parsed.src.type == "CPU");
@@ -57,6 +61,9 @@ void SameWorkerRecvDone(const DeviceMgr* device_mgr,
                 << src_override << " and dst_override " << dst_override
                 << ") tensor dtype:" << DataTypeString(in.dtype()) << " "
                 << parsed.FullKey();
+      } else if (!(src_host && dst_host)) {
+        VLOG(3) << "Forwarding tensor without copying because tensor is in "
+                   "migratable memory and the destination is not CPU.";
       }
     }
     *out = in;

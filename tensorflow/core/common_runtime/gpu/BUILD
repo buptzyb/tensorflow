@@ -130,6 +130,7 @@ filegroup(
         "gpu_id.h",
         "gpu_id_manager.h",
         "gpu_managed_allocator.h",
+        "gpu_offload_allocator.h",
         "gpu_process_state.h",
         "gpu_util.h",
         "gpu_virtual_mem_allocator.h",
@@ -143,6 +144,7 @@ filegroup(
 tf_cuda_library(
     name = "gpu_runtime_impl",
     srcs = [
+        "gpu_offload_allocator.cc",
         "gpu_cudamalloc_allocator.cc",
         "gpu_debug_allocator.cc",
         "gpu_device.cc",
@@ -156,6 +158,7 @@ tf_cuda_library(
     copts = tf_copts(),
     cuda_deps = [
         "@local_config_cuda//cuda:cudnn_header",
+        "//tensorflow/compiler/xla/stream_executor:platform",
         "//tensorflow/compiler/xla/stream_executor/cuda:cuda_platform",
         "//tensorflow/compiler/xla/stream_executor/gpu:gpu_stream",
         ":gpu_virtual_mem_allocator",
