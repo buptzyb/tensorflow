@@ -1792,7 +1792,7 @@ class BaseStagingArea(object):
       of tensors.
     """
 
-    tensors = self._create_device_transfers(tensors)
+    # tensors = self._create_device_transfers(tensors)
 
     # Sets shape
     for output, i in zip(tensors, indices):
@@ -1927,19 +1927,19 @@ class StagingArea(BaseStagingArea):
       indices = list(six.moves.range(len(values)))
       vals, _ = self._check_put_dtypes(values, indices)
 
-      with ops.colocate_with(self._coloc_op):
-        op = gen_data_flow_ops.stage(
-            values=vals,
-            shared_name=self._name,
-            name=scope,
-            capacity=self._capacity,
-            memory_limit=self._memory_limit)
+      # with ops.colocate_with(self._coloc_op):
+      op = gen_data_flow_ops.stage(
+          values=vals,
+          shared_name=self._name,
+          name=scope,
+          capacity=self._capacity,
+          memory_limit=self._memory_limit)
 
       return op
 
   def __internal_get(self, get_fn, name):
-    with ops.colocate_with(self._coloc_op):
-      ret = get_fn()
+    # with ops.colocate_with(self._coloc_op):
+    ret = get_fn()
 
     indices = list(six.moves.range(len(self._dtypes)))  # Hard coded
     return self._get_return_value(ret, indices)
@@ -2197,16 +2197,16 @@ class MapStagingArea(BaseStagingArea):
 
       vals, indices = self._check_put_dtypes(vals, indices)
 
-      with ops.colocate_with(self._coloc_op):
-        op = self._put_fn(
-            key,
-            indices,
-            vals,
-            dtypes=self._dtypes,
-            shared_name=self._name,
-            name=scope,
-            capacity=self._capacity,
-            memory_limit=self._memory_limit)
+      # with ops.colocate_with(self._coloc_op):
+      op = self._put_fn(
+          key,
+          indices,
+          vals,
+          dtypes=self._dtypes,
+          shared_name=self._name,
+          name=scope,
+          capacity=self._capacity,
+          memory_limit=self._memory_limit)
     return op
 
   def _get_indices_and_dtypes(self, indices=None):
@@ -2262,15 +2262,15 @@ class MapStagingArea(BaseStagingArea):
 
     indices, dtypes = self._get_indices_and_dtypes(indices)
 
-    with ops.colocate_with(self._coloc_op):
-      result = self._peek_fn(
-          key,
-          shared_name=self._name,
-          indices=indices,
-          dtypes=dtypes,
-          name=name,
-          capacity=self._capacity,
-          memory_limit=self._memory_limit)
+    # with ops.colocate_with(self._coloc_op):
+    result = self._peek_fn(
+        key,
+        shared_name=self._name,
+        indices=indices,
+        dtypes=dtypes,
+        name=name,
+        capacity=self._capacity,
+        memory_limit=self._memory_limit)
 
     return self._get_return_value(result, indices)
 
@@ -2323,15 +2323,15 @@ class MapStagingArea(BaseStagingArea):
 
     indices, dtypes = self._get_indices_and_dtypes(indices)
 
-    with ops.colocate_with(self._coloc_op):
-      result = self._pop_fn(
-          key,
-          shared_name=self._name,
-          indices=indices,
-          dtypes=dtypes,
-          name=name,
-          capacity=self._capacity,
-          memory_limit=self._memory_limit)
+    # with ops.colocate_with(self._coloc_op):
+    result = self._pop_fn(
+        key,
+        shared_name=self._name,
+        indices=indices,
+        dtypes=dtypes,
+        name=name,
+        capacity=self._capacity,
+        memory_limit=self._memory_limit)
 
     return key, self._get_return_value(result, indices)
 
@@ -2358,14 +2358,14 @@ class MapStagingArea(BaseStagingArea):
 
     indices, dtypes = self._get_indices_and_dtypes(indices)
 
-    with ops.colocate_with(self._coloc_op):
-      key, result = self._popitem_fn(
-          shared_name=self._name,
-          indices=indices,
-          dtypes=dtypes,
-          name=name,
-          capacity=self._capacity,
-          memory_limit=self._memory_limit)
+    # with ops.colocate_with(self._coloc_op):
+    key, result = self._popitem_fn(
+        shared_name=self._name,
+        indices=indices,
+        dtypes=dtypes,
+        name=name,
+        capacity=self._capacity,
+        memory_limit=self._memory_limit)
 
     # Separate keys and results out from
     # underlying namedtuple
