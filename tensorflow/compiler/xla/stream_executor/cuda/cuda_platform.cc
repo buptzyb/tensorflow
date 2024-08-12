@@ -140,18 +140,21 @@ CudaPlatform::DescriptionForDevice(int ordinal) const {
   return GpuExecutor::CreateDeviceDescription(ordinal);
 }
 
-tsl::StatusOr<StreamExecutor*> CudaPlatform::ExecutorForDevice(int ordinal) {
+tsl::StatusOr<StreamExecutor*> CudaPlatform::ExecutorForDevice(int ordinal,
+                                                               int stream_id) {
   StreamExecutorConfig config;
   config.ordinal = ordinal;
+  config.stream_id = stream_id;
   config.plugin_config = PluginConfig();
   config.device_options = GetDeviceOptionsFromEnv();
   return GetExecutor(config);
 }
 
 tsl::StatusOr<StreamExecutor*> CudaPlatform::ExecutorForDeviceWithPluginConfig(
-    int device_ordinal, const PluginConfig& plugin_config) {
+    int device_ordinal, const PluginConfig& plugin_config, int stream_id) {
   StreamExecutorConfig config;
   config.ordinal = device_ordinal;
+  config.stream_id = stream_id;
   config.plugin_config = plugin_config;
   config.device_options = GetDeviceOptionsFromEnv();
   return GetExecutor(config);
@@ -172,15 +175,16 @@ tsl::StatusOr<StreamExecutor*> CudaPlatform::GetExecutor(
 tsl::StatusOr<std::unique_ptr<StreamExecutor>>
 CudaPlatform::GetUncachedExecutor(const StreamExecutorConfig& config) {
   auto executor = std::make_unique<StreamExecutor>(
-      this, std::make_unique<GpuExecutor>(config.plugin_config),
-      config.ordinal);
+      this, std::make_unique<GpuExecutor>(config.plugin_config), config.ordinal,
+      config.stream_id);
   auto init_status = executor->Init(config.device_options);
   if (!init_status.ok()) {
     return tsl::Status(
         absl::StatusCode::kInternal,
-        absl::StrFormat(
-            "failed initializing StreamExecutor for CUDA device ordinal %d: %s",
-            config.ordinal, init_status.ToString()));
+        absl::StrFormat("failed initializing StreamExecutor for CUDA device "
+                        "ordinal %d stream group %d: %s",
+                        config.ordinal, config.stream_id,
+                        init_status.ToString()));
   }
 
   return std::move(executor);

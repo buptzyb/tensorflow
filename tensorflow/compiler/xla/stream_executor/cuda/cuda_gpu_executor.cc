@@ -127,9 +127,10 @@ GpuExecutor::~GpuExecutor() {
   }
 }
 
-tsl::Status GpuExecutor::Init(int device_ordinal,
+tsl::Status GpuExecutor::Init(int device_ordinal, int stream_id,
                               DeviceOptions device_options) {
   device_ordinal_ = device_ordinal;
+  stream_id_ = stream_id;
 
   auto status = GpuDriver::Init();
   if (!status.ok()) {
@@ -141,8 +142,8 @@ tsl::Status GpuExecutor::Init(int device_ordinal,
     return status;
   }
 
-  status = GpuDriver::CreateContext(device_ordinal_, device_, device_options,
-                                    &context_);
+  status = GpuDriver::CreateContext(device_ordinal_, stream_id_, device_,
+                                    device_options, &context_);
   if (!status.ok()) {
     return status;
   }

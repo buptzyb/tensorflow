@@ -34,6 +34,7 @@ DynamicDeviceMgr::DynamicDeviceMgr(
     : cpu_device_(nullptr) {
   Status status = AddDevices(std::move(devices));
   CHECK(status.ok());  // Crash OK
+  InitStreamDevice();
   mutex_lock l(devices_mu_);
   // Initialize cpu_device_.
   for (const auto& it : dynamic_devices_) {
@@ -251,6 +252,59 @@ Device* DynamicDeviceMgr::HostCPU() const {
   }
 
   return cpu_device_.load(std::memory_order_relaxed);
+}
+
+void DynamicDeviceMgr::InitStreamDevice() {
+  // Real devices and stream devices are all in dynamic_devices_. We should
+  // count how many stream devices there are belonging to one real device.
+  std::unordered_map<string, size_t> stream_num_map;
+  for (auto& item : dynamic_devices_) {
+    Device* d = item.first;
+    if (DeviceNameUtils::IsStreamDeviceName(d->name())) {
+      string name = DeviceNameUtils::GetRealDeviceName(d->name());
+      if (stream_num_map.find(name) == stream_num_map.end()) {
+        stream_num_map[name] = 1;
+      } else {
+        ++stream_num_map[name];
+      }
+    }
+  }
+
+  // Create stream device maps and set real device for the stream devices.
+  Device* device;
+  for (auto& item : stream_num_map) {
+    TF_CHECK_OK(LookupDevice(item.first, &device));
+    stream_device_map_[device] = std::vector<Device*>(item.second);
+    if (stream_group_count_ < item.second) stream_group_count_ = item.second;
+  }
+  Device* real_device;
+  for (auto& item : dynamic_devices_) {
+    Device* d = item.first;
+    if (DeviceNameUtils::IsStreamDeviceName(d->name())) {
+      TF_CHECK_OK(LookupDevice(DeviceNameUtils::GetRealDeviceName(d->name()),
+                               &real_device));
+      stream_device_map_[real_device][d->parsed_name().id] = d;
+      d->SetRealDevice(real_device);
+    }
+  }
+
+  for (auto& item : stream_num_map) DCHECK_EQ(item.second, stream_group_count_);
+}
+
+int DynamicDeviceMgr::StreamGroupCount() const { return stream_group_count_; }
+
+bool DynamicDeviceMgr::DeviceHasMultipleStreams(const Device* device) const {
+  if (stream_device_map_.find(device) != stream_device_map_.end()) return true;
+  return false;
+}
+
+Device* DynamicDeviceMgr::LookupStream(const Device* device,
+                                       const int stream_id) const {
+  if (stream_id < 0 || !DeviceHasMultipleStreams(device) ||
+      stream_device_map_.at(device).size() <= stream_id) {
+    return const_cast<Device*>(device);
+  }
+  return stream_device_map_.at(device).at(stream_id);
 }
 
 }  // namespace tensorflow

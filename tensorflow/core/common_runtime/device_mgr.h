@@ -75,6 +75,19 @@ class DeviceMgr {
   // nullptr.
   virtual Device* HostCPU() const = 0;
 
+  // Get the number of stream groups created for multi-stream enabled devices.
+  // Returns 0 if the multi-stream is not enabled.
+  virtual int StreamGroupCount() const = 0;
+
+  // Returns true if one device has multi-stream enabled.
+  virtual bool DeviceHasMultipleStreams(const Device* device) const = 0;
+
+  // Lookup the StreamDevice that belongs to the real device *device and
+  // contains the stream group of index stream_id. Returns *device itself if no
+  // such a stream device can be found.
+  virtual Device* LookupStream(const Device* device,
+                               const int stream_id) const = 0;
+
   TF_DISALLOW_COPY_AND_ASSIGN(DeviceMgr);
 };
 
@@ -105,6 +118,10 @@ class DynamicDeviceMgr : public DeviceMgr {
   int NumDeviceType(const string& type) const override;
   int NumDevices() const override;
   Device* HostCPU() const override;
+  int StreamGroupCount() const override;
+  bool DeviceHasMultipleStreams(const Device* device) const override;
+  Device* LookupStream(const Device* device,
+                       const int stream_id) const override;
 
   // Add devices to device manager. Returns error for repeated device names.
   Status AddDevices(std::vector<std::unique_ptr<Device>> devices);
@@ -164,6 +181,12 @@ class DynamicDeviceMgr : public DeviceMgr {
   // still be available to avoid segmentation fault. We keep the devices in this
   // buffer only for that purpose.
   DeviceCircularBuffer stale_devices_ TF_GUARDED_BY(devices_mu_);
+
+  // Initialize the StreamDevices that are used for multi-stream executions.
+  void InitStreamDevice();
+
+  int stream_group_count_ = 0;
+  std::unordered_map<const Device*, std::vector<Device*>> stream_device_map_;
 
   TF_DISALLOW_COPY_AND_ASSIGN(DynamicDeviceMgr);
 };

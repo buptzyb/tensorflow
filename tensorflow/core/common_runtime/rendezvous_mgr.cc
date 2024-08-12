@@ -87,6 +87,26 @@ void SameWorkerRecvDone(const DeviceMgr* device_mgr,
     done(s);
     return;
   }
+  if (send_args.device_context) {
+    if (src_device->parsed_name().type == "GPU") {
+      src_device = device_mgr->LookupStream(
+          src_device, send_args.device_context->stream_id());
+      if (dst_device->parsed_name().type == "CPU") {
+        dst_device = device_mgr->LookupStream(
+            dst_device, send_args.device_context->stream_id());
+      }
+    }
+  }
+  if (recv_args.device_context) {
+    if (dst_device->parsed_name().type == "GPU") {
+      dst_device = device_mgr->LookupStream(
+          dst_device, recv_args.device_context->stream_id());
+      if (src_device->parsed_name().type == "CPU") {
+        src_device = device_mgr->LookupStream(
+            src_device, recv_args.device_context->stream_id());
+      }
+    }
+  }
 
   profiler::ScopedMemoryDebugAnnotation op_annotation(
       "SameWorkerRecvDone", 0, "dynamic", in.dtype(),

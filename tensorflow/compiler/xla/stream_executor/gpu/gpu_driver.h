@@ -219,9 +219,16 @@ class GpuDriver {
   // calling thread. Current documentation on contexts and their influence on
   // userspace processes is given here:
   // http://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__CTX.html#group__CUDA__CTX_1g65dc0012348bc84810e2103a40d8e2cf
-  static tsl::Status CreateContext(int device_ordinal, GpuDeviceHandle device,
+  static tsl::Status CreateContext(int device_ordinal, int stream_id,
+                                   GpuDeviceHandle device,
                                    const DeviceOptions& device_options,
                                    GpuContext** context);
+  static tsl::Status CreateContext(int device_ordinal, GpuDeviceHandle device,
+                                   const DeviceOptions& device_options,
+                                   GpuContext** context) {
+    return GpuDriver::CreateContext(device_ordinal, 0, device, device_options,
+                                    context);
+  }
 
   // Destroys the provided context via cuCtxDestroy.
   // Don't do this while clients could still be using the context, per the docs

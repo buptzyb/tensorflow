@@ -85,11 +85,23 @@ class GPUProcessState {
   // the current system environment.  Otherwise returns nullptr.
   virtual Allocator* GetGPUAllocator(
       const GPUOptions& options, tsl::TfDeviceId tf_device_id,
-      size_t total_bytes, const std::vector<tsl::TfDeviceId>& peer_gpu_ids);
+      size_t total_bytes, const std::vector<tsl::TfDeviceId>& peer_gpu_ids,
+      int stream_id = 0);
 
-  Allocator* GetGPUAllocator(tsl::TfDeviceId tf_device_id) {
+  Allocator* GetGPUAllocator(tsl::TfDeviceId tf_device_id, int stream_id = 0) {
     return GetGPUAllocator(/*options=*/{}, tf_device_id, /*total_bytes=*/0,
-                           /*peer_gpu_ids=*/{});
+                           /*peer_gpu_ids=*/{}, stream_id);
+  }
+
+  virtual void GetGPUAllocators(
+      const GPUOptions& options, tsl::TfDeviceId tf_device_id,
+      size_t total_bytes, const std::vector<tsl::TfDeviceId>& peer_gpu_ids,
+      size_t num_allocators, std::vector<Allocator*>& allocators);
+
+  void GetGPUAllocators(tsl::TfDeviceId tf_device_id, size_t num_allocators,
+                        std::vector<Allocator*>& allocators) {
+    return GetGPUAllocators(/*options=*/{}, tf_device_id, /*total_bytes=*/0,
+                            /*peer_gpu_ids=*/{}, num_allocators, allocators);
   }
 
   int NumGPUAllocators() {
@@ -101,7 +113,7 @@ class GPUProcessState {
   // e.g. to set the memory limit on this allocator.  After that if you pass in
   // a different set of options, they will be ignored.
   virtual Allocator* GetGpuHostAllocator(const GPUOptions& options,
-                                         int numa_node);
+                                         int numa_node, int stream_id = 0);
 
   // Registers a Visitor to be invoked on new chunks of memory allocated by the
   // SubAllocator of every GPU proximate to the specified bus.  The AllocVisitor
@@ -113,22 +125,26 @@ class GPUProcessState {
   // be the index of one of the PCIe buses (maybe the NUMA node at which the
   // PCIe is rooted).  If the bus_id is invalid, results are undefined.
   virtual void AddGPUAllocVisitor(int bus_id,
-                                  const SubAllocator::Visitor& visitor);
+                                  const SubAllocator::Visitor& visitor,
+                                  int stream_id = 0);
 
   // Registers a Visitor to be invoked on new chunks of memory allocated by
   // the SubAllocator of the GpuHostAllocator for the given numa_node.
   virtual void AddGpuHostAllocVisitor(int numa_node,
-                                      const SubAllocator::Visitor& visitor);
+                                      const SubAllocator::Visitor& visitor,
+                                      int stream_id = 0);
 
   // Registers a Visitor to be invoked on each chunk handed back for freeing to
   // the SubAllocator of the GpuHostAllocator for the given numa_node.
   virtual void AddGpuHostFreeVisitor(int numa_node,
-                                     const SubAllocator::Visitor& visitor);
+                                     const SubAllocator::Visitor& visitor,
+                                     int stream_id = 0);
 
   // Returns bus_id for the given GPU id.
   virtual int BusIdForGPU(tsl::TfDeviceId tf_device_id);
 
-  SharedCounter* GPUAllocatorCounter(tsl::TfDeviceId tf_device_id);
+  SharedCounter* GPUAllocatorCounter(tsl::TfDeviceId tf_device_id,
+                                     int stream_id = 0);
 
  protected:
   // GPUProcessState is a singleton that should not normally be deleted except
@@ -159,15 +175,19 @@ class GPUProcessState {
     SubAllocator* sub_allocator;  // owned by allocator
     std::unique_ptr<Allocator> recording_allocator;
   };
-  std::vector<AllocatorParts> gpu_allocators_ TF_GUARDED_BY(mu_);
-  std::vector<std::vector<SubAllocator::Visitor>> gpu_visitors_
+  std::vector<std::vector<AllocatorParts>> gpu_allocators_ TF_GUARDED_BY(mu_);
+  std::vector<std::vector<std::vector<SubAllocator::Visitor>>> gpu_visitors_
       TF_GUARDED_BY(mu_);
 
-  std::vector<AllocatorParts> gpu_host_allocators_ TF_GUARDED_BY(mu_);
-  std::vector<std::vector<SubAllocator::Visitor>> gpu_host_alloc_visitors_
+  std::vector<std::vector<AllocatorParts>> gpu_host_allocators_
       TF_GUARDED_BY(mu_);
-  std::vector<std::vector<SubAllocator::Visitor>> gpu_host_free_visitors_
-      TF_GUARDED_BY(mu_);
+  std::vector<std::vector<std::vector<SubAllocator::Visitor>>>
+      gpu_host_alloc_visitors_ TF_GUARDED_BY(mu_);
+  std::vector<std::vector<std::vector<SubAllocator::Visitor>>>
+      gpu_host_free_visitors_ TF_GUARDED_BY(mu_);
+
+  std::unordered_map<int, mutex> shared_pool_lock_ TF_GUARDED_BY(mu_);
+  std::unordered_map<int, int64_t> shared_pool_bytes_ TF_GUARDED_BY(mu_);
 };
 
 }  // namespace tensorflow

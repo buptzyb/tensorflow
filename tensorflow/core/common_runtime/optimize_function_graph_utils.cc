@@ -266,7 +266,8 @@ Status PinArgsAndRets(const std::vector<string>& input_devices,
     const AttrValue* attr_value;
     TF_RETURN_IF_ERROR(node->attrs().Find("index", &attr_value));
     int64_t index = attr_value->i();
-    node->set_assigned_device_name(input_devices[index]);
+    node->set_assigned_device_name(
+        DeviceNameUtils::GetRealDeviceName(input_devices[index]));
   }
 
   for (Node* node : ret_nodes) {
@@ -409,7 +410,8 @@ Status PinArgsAndRets(const std::vector<string>& input_devices,
       DCHECK_GT(output_devices.size(), index);
       VLOG(3) << "Setting output device to " << output_devices[index]
               << " for return at index " << index;
-      node->set_assigned_device_name(output_devices[index]);
+      node->set_assigned_device_name(
+          DeviceNameUtils::GetRealDeviceName(output_devices[index]));
     }
   }
   return OkStatus();
@@ -694,7 +696,8 @@ PreprocessAndPartitionGraph(
     OptimizedFunctionGraphInfo& input_optimized_graph,
     const FunctionLibraryRuntime::InstantiateOptions& options,
     const DeviceSet& dev_set, const FunctionLibraryDefinition* input_lib_def,
-    const std::vector<CompositeDevice*>& composite_devices, Env* env) {
+    const std::vector<CompositeDevice*>& composite_devices, Env* env,
+    const DeviceMgr* device_mgr) {
   std::unique_ptr<Graph>& graph = input_optimized_graph.function_graph;
 
   // Expand the nodes assigned to a CompositeDevice before graph partition to
@@ -761,6 +764,30 @@ PreprocessAndPartitionGraph(
     DEBUG_DATA_DUMPER()->DumpGraph(partitioned_func_name, kDebugGroupMain,
                                    "after_partition_passes", optimized_subgraph,
                                    &input_optimized_graph.lib_def, false);
+  }
+
+  // Convert device_name to stream_device_name if multiple streams are used.
+  if (DeviceNameUtils::IsStreamDeviceName(options.target)) {
+    DeviceNameUtils::ParsedName parsed;
+    if (!DeviceNameUtils::ParseFullOrLocalName(options.target, &parsed)) {
+      return errors::InvalidArgument("Failed to parse target device name ",
+                                     options.target);
+    }
+    if (parsed.has_id) {
+      std::vector<std::string> device_names;
+      for (const auto& pair : *device_name_to_subgraphs) {
+        device_names.push_back(pair.first);
+      }
+      for (const auto& name : device_names) {
+        Device* device;
+        TF_RETURN_IF_ERROR(device_mgr->LookupDevice(name, &device));
+        if (device_mgr->DeviceHasMultipleStreams(device)) {
+          auto item = device_name_to_subgraphs->extract(name);
+          item.key() = DeviceNameUtils::GetStreamDeviceName(name, parsed.id);
+          device_name_to_subgraphs->insert(std::move(item));
+        }
+      }
+    }
   }
 
   return std::move(device_name_to_subgraphs);
