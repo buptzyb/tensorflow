@@ -1,0 +1,15 @@
+session_inter_op_thread_pool { num_threads: 1 }
+session_inter_op_thread_pool { num_threads: 1 }
+session_inter_op_thread_pool { num_threads: 1 }
+session_inter_op_thread_pool { num_threads: 1 }
+graph_options {
+  optimizer_options {
+    global_jit_level: ON_1
+  }
+}
+gpu_options {
+  allow_growth: true
+  #  experimental {
+  #    virtual_devices { memory_limit_mb: 10240 }
+  #  }
+}
