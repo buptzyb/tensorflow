@@ -1289,7 +1289,6 @@ void BaseGPUDevice::ReinitializeDevice(OpKernelContext* context,
   ConcretePerOpGpuDevice* concrete_device =
       static_cast<ConcretePerOpGpuDevice*>(device);
   DCHECK(concrete_device);
-  DCHECK_EQ(stream_id, 0);
   const gpuStream_t gpu_stream = reinterpret_cast<gpuStream_t>(
       stream_->compute->platform_specific_handle().stream);
   concrete_device->Reinitialize(context, gpu_stream, tf_device_id_, allocator,
@@ -1310,7 +1309,6 @@ Status BaseGPUDevice::ReinitializeGpuDevice(OpKernelContext* context,
     const int stream_id = gpu_dc->stream_id();
     VLOG(1) << "  eigen_gpu_device(" << dc << ") => stream[" << stream_id
             << "]";
-    CHECK_EQ(stream_id, 0);
     ReinitializeDevice(context, device, stream_id, allocator);
   } else {
     ReinitializeDevice(context, device, 0, allocator);
@@ -1765,6 +1763,14 @@ Status BaseGPUDeviceFactory::CreateDevices(
     int64_t memory_limit = tf_device_specs[di].memory_limit_bytes;
     std::vector<Allocator*> gpu_allocators;
     int stream_group_count = 1;
+    if (is_stream_factory_) {
+      stream_group_count = std::max(1, options.config.gpu_options()
+                                           .experimental()
+                                           .multi_stream_options()
+                                           .stream_group_count());
+      // Don't create the StreamDevice if multi-stream is not enabled.
+      if (stream_group_count == 1) return OkStatus();
+    }
     gpu_allocators.reserve(stream_group_count);
     for (int i = 0; i < stream_group_count; ++i) {
       gpu_allocators.push_back(process_state->GetGPUAllocator(
@@ -1996,8 +2002,6 @@ Status BaseGPUDeviceFactory::CreateGPUDevice(
     std::vector<std::unique_ptr<Device>>* devices) {
 #endif  // TF_GPU_USE_PJRT
   CHECK_GE(tf_device_id.value(), 0);
-  const string device_name =
-      strings::StrCat(name_prefix, "/device:GPU:", tf_device_id.value());
   tsl::CheckValidTfDeviceId(
       DEVICE_GPU, se::GPUMachineManager()->VisibleDeviceCount(), tf_device_id);
   tsl::PlatformDeviceId platform_device_id;
@@ -2013,7 +2017,6 @@ Status BaseGPUDeviceFactory::CreateGPUDevice(
   }
   auto desc = std::move(desc_status).value();
 
-  CHECK(gpu_allocators.size() == 1);
   for (size_t i = 0; i < gpu_allocators.size(); ++i) {
     std::optional<AllocatorStats> stats = gpu_allocators[i]->GetStats();
 
@@ -2027,6 +2030,12 @@ Status BaseGPUDeviceFactory::CreateGPUDevice(
     // stats->bytes_limit.
     int64_t bytes_limit =
         (stats && stats->bytes_limit) ? *stats->bytes_limit : 0;
+    const string device_name =
+        is_stream_factory_
+            ? strings::StrCat(name_prefix, "/device:STREAM_GPU_",
+                              tf_device_id.value(), ":", i)
+            : strings::StrCat(name_prefix,
+                              "/device:GPU:", tf_device_id.value());
     std::unique_ptr<BaseGPUDevice> gpu_device = CreateGPUDevice(
         options, device_name, static_cast<Bytes>(bytes_limit), dev_locality,
         tf_device_id, GetShortDeviceDescription(platform_device_id, *desc),
@@ -2035,6 +2044,7 @@ Status BaseGPUDeviceFactory::CreateGPUDevice(
     LOG(INFO) << "Created device " << device_name << " with "
               << (bytes_limit >> 20) << " MB memory: " << " -> "
               << GetShortDeviceDescription(platform_device_id, *desc);
+    if (is_stream_factory_) gpu_device->SetStreamId(i);
 #ifdef TF_GPU_USE_PJRT
     TF_RETURN_IF_ERROR(gpu_device->Init(options, xla_local_device_state));
 #else

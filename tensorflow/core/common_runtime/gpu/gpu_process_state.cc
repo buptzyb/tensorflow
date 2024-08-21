@@ -149,6 +149,15 @@ Allocator* GPUProcessState::GetGPUAllocator(
   AllocatorParts& allocator_parts =
       gpu_allocators_[tf_device_id.value()][stream_id];
   if (allocator_parts.allocator == nullptr) {
+    // Divide the memory by stream_group_count unless async allocator is used.
+    if (UseCudaMemoryGuardAllocator() || UseCudaMallocAllocator() ||
+        (!UseCudaMallocAsyncAllocator() &&
+         !options.experimental().use_cuda_malloc_async())) {
+      total_bytes /= std::max(
+          1,
+          options.experimental().multi_stream_options().stream_group_count());
+    }
+
     // Validate allocator types.
     if (!allocator_type.empty() && allocator_type != "BFC") {
       LOG(ERROR) << "Invalid allocator type: " << allocator_type;

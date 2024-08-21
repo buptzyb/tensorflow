@@ -285,6 +285,7 @@ void DynamicDeviceMgr::InitStreamDevice() {
       TF_CHECK_OK(LookupDevice(DeviceNameUtils::GetRealDeviceName(d->name()),
                                &real_device));
       stream_device_map_[real_device][d->parsed_name().id] = d;
+      d->SetRealDevice(real_device);
     }
   }
 

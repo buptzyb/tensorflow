@@ -61,6 +61,34 @@ class GPUDevice : public BaseGPUDevice {
   bool force_gpu_compatible_ = false;
 };
 
+//-------------------------------------------------------------------------------
+// StreamDevice works only when more than one stream group is created on GPU via
+// the GPUOptions::Experimental::MultiStreamOptions configuration. One
+// StreamDevice object manages operations and resources in one stream group.
+// ------------------------------------------------------------------------------
+class StreamDevice : public GPUDevice {
+ public:
+  StreamDevice(const SessionOptions& options, const string& name,
+               Bytes memory_limit, const DeviceLocality& locality,
+               tsl::TfDeviceId tf_device_id, const string& physical_device_desc,
+               Allocator* gpu_allocator, Allocator* cpu_allocator)
+      : GPUDevice(options, name, memory_limit, locality, tf_device_id,
+                  physical_device_desc, gpu_allocator, cpu_allocator) {}
+
+  void SetRealDevice(Device* device) override { real_device_ = device; }
+
+  const Device* GetRealDevice() const override { return real_device_; }
+
+  ResourceMgr* resource_manager() override {
+    // StreamDevices that belong to one real GPU device should share their
+    // resources that are held by the resource manager.
+    return real_device_->resource_manager();
+  }
+
+ private:
+  Device* real_device_;
+};
+
 class GPUDeviceFactory : public BaseGPUDeviceFactory {
  private:
   std::unique_ptr<BaseGPUDevice> CreateGPUDevice(
@@ -75,6 +103,31 @@ class GPUDeviceFactory : public BaseGPUDeviceFactory {
 };
 
 REGISTER_LOCAL_DEVICE_FACTORY("GPU", GPUDeviceFactory, 210);
+
+class StreamDeviceFactory : public BaseGPUDeviceFactory {
+ public:
+  StreamDeviceFactory() { is_stream_factory_ = true; }
+
+  Status ListPhysicalDevices(std::vector<string>* devices) override {
+    // We don't know how many StreamDevices to create until we specify it
+    // explicitly through the SessionConfig. Even if we did, a StreamDevice
+    // is not considered "physical". Therefore, we do nothing here.
+    return OkStatus();
+  }
+
+ private:
+  std::unique_ptr<BaseGPUDevice> CreateGPUDevice(
+      const SessionOptions& options, const string& name, Bytes memory_limit,
+      const DeviceLocality& locality, tsl::TfDeviceId tf_device_id,
+      const string& physical_device_desc, Allocator* gpu_allocator,
+      Allocator* cpu_allocator) override {
+    return absl::make_unique<StreamDevice>(
+        options, name, memory_limit, locality, tf_device_id,
+        physical_device_desc, gpu_allocator, cpu_allocator);
+  }
+};
+
+REGISTER_LOCAL_DEVICE_FACTORY("STREAM_GPU", StreamDeviceFactory);
 
 //------------------------------------------------------------------------------
 // A CPUDevice that optimizes for interaction with GPUs in the

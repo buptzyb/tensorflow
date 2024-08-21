@@ -193,6 +193,15 @@ class Device : public DeviceBase {
   // Informs if this Device can be used as a caller in RemoteCall operation.
   virtual bool IsRemoteCallAllowed() const;
 
+  // Sets the real device of a stream device.
+  virtual void SetRealDevice(Device* device) {
+    LOG(ERROR) << "SetRealDevice is not supported on device " << name();
+  }
+
+  // Gets the real device of a stream device, or itself if it's not a stream
+  // device.
+  virtual const Device* GetRealDevice() const { return this; }
+
   // Whether to merge the host_to_device copy stream with the compute stream.
   // Only useful for GPU devices.
   virtual bool merge_host_to_device_stream() const { return false; }

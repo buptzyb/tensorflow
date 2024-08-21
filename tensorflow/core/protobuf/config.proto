@@ -302,6 +302,16 @@ message GPUOptions {
     }
 
     StreamMergeOptions stream_merge_options = 19;
+
+    // Options that controls the behavior of multi-stream executions on GPU.
+    message MultiStreamOptions {
+      // If stream_group_count > 1, TF will create multiple stream groups in one
+      // logical GPU device. Executions of concurrent TF graph calls are
+      // automatically assigned to different stream groups for parallelism.
+      int32 stream_group_count = 1;
+    }
+
+    MultiStreamOptions multi_stream_options = 20;
   }
 
   // Everything inside experimental is subject to change and is not subject
