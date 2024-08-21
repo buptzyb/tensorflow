@@ -781,7 +781,7 @@ PreprocessAndPartitionGraph(
     const FunctionLibraryRuntime::InstantiateOptions& options,
     const DeviceSet& dev_set, const FunctionLibraryDefinition* input_lib_def,
     const std::vector<CompositeDevice*>& composite_devices, Device* cpu_device,
-    Env* env) {
+    Env* env, const DeviceMgr* device_mgr) {
   std::unique_ptr<Graph>& graph = input_optimized_graph.function_graph;
 
   // Expand the nodes assigned to a CompositeDevice before graph partition to
@@ -862,6 +862,32 @@ PreprocessAndPartitionGraph(
     DEBUG_DATA_DUMPER()->DumpGraph(partitioned_func_name, kDebugGroupMain,
                                    "after_partition_passes", optimized_subgraph,
                                    &input_optimized_graph.lib_def, false);
+  }
+
+  // Convert device_name to stream_device_name, if multi-stream is used.
+  if (DeviceNameUtils::IsStreamDeviceName(options.target)) {
+    const std::string real_name =
+        DeviceNameUtils::GetRealDeviceName(options.target);
+    DeviceNameUtils::ParsedName parsed;
+    if (!DeviceNameUtils::ParseFullOrLocalName(options.target, &parsed)) {
+      return errors::InvalidArgument("Failed to parse target device name ",
+                                     options.target);
+    }
+    if (parsed.has_id) {
+      std::vector<std::string> device_names;
+      for (const auto& pair : *device_name_to_subgraphs) {
+        device_names.push_back(pair.first);
+      }
+      for (const auto& name : device_names) {
+        Device* device;
+        TF_RETURN_IF_ERROR(device_mgr->LookupDevice(name, &device));
+        if (device_mgr->DeviceHasMultipleStreams(device)) {
+          auto item = device_name_to_subgraphs->extract(name);
+          item.key() = DeviceNameUtils::GetStreamDeviceName(name, parsed.id);
+          device_name_to_subgraphs->insert(std::move(item));
+        }
+      }
+    }
   }
 
   return std::move(device_name_to_subgraphs);

@@ -24,6 +24,7 @@ limitations under the License.
 
 #include "absl/time/time.h"
 #include "tensorflow/core/common_runtime/composite_device.h"
+#include "tensorflow/core/common_runtime/device_mgr.h"
 #include "tensorflow/core/common_runtime/optimized_function_graph_info.h"
 #include "tensorflow/core/framework/function.h"
 #include "tensorflow/core/platform/env.h"
@@ -87,7 +88,7 @@ PreprocessAndPartitionGraph(
     const FunctionLibraryRuntime::InstantiateOptions& options,
     const DeviceSet& dev_set, const FunctionLibraryDefinition* input_lib_def,
     const std::vector<CompositeDevice*>& composite_devices, Device* cpu_device,
-    Env* env);
+    Env* env, const DeviceMgr* device_mgr);
 
 }  // namespace tensorflow
 

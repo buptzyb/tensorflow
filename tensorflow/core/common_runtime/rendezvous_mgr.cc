@@ -81,11 +81,19 @@ void SameWorkerRecvDone(const DeviceMgr* device_mgr,
     done(s);
     return;
   }
+  if (send_args.device_context) {
+    src_device = device_mgr->LookupStream(
+        src_device, send_args.device_context->stream_id());
+  }
   Device* dst_device;
   s = device_mgr->LookupDevice(parsed.dst_device, &dst_device);
   if (!s.ok()) {
     done(s);
     return;
+  }
+  if (recv_args.device_context) {
+    dst_device = device_mgr->LookupStream(
+        dst_device, recv_args.device_context->stream_id());
   }
 
   tsl::profiler::ScopedMemoryDebugAnnotation op_annotation(
