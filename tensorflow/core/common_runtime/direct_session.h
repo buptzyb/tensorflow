@@ -44,6 +44,7 @@ limitations under the License.
 #include "tensorflow/core/platform/thread_annotations.h"
 #include "tensorflow/core/platform/types.h"
 #include "tensorflow/core/public/session.h"
+#include "xla/tsl/framework/serving_device_selector.h"
 
 namespace tensorflow {
 
@@ -165,6 +166,7 @@ class DirectSession : public Session {
     std::unique_ptr<Graph> graph;
     NameNodeMap name_to_node;
     std::vector<PerPartitionExecutorsAndLib> items;
+    std::vector<std::vector<PerPartitionExecutorsAndLib>> stream_items;
     std::unordered_map<string, size_t> input_name_to_index;
     std::unordered_map<string, string> input_name_to_rendezvous_key;
     std::unordered_map<string, size_t> output_name_to_index;
@@ -437,6 +439,10 @@ class DirectSession : public Session {
   // Otherwise run in global thread pool, session owned thread pool or handler
   // pool according to other specifications of RunOptions and ConfigProto.
   bool run_in_caller_thread_ = false;
+
+  // Select the stream group to execute GPU graphs if there are multiple stream
+  // groups available.
+  std::unique_ptr<tsl::ServingDeviceSelector> stream_selector_;
 
   DirectSession(const DirectSession&) = delete;
   void operator=(const DirectSession&) = delete;

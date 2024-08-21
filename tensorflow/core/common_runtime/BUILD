@@ -2143,6 +2143,7 @@ tf_cuda_library(
         "//tensorflow/core:lib",
         "//tensorflow/core:lib_internal",
         "//tensorflow/core:protos_all_cc",
+        "//tensorflow/core/common_runtime/gpu:gpu_serving_device_selector",
         "//tensorflow/core/debug:debug_graph_utils",
         "//tensorflow/core/kernels:function_ops",
         "//tensorflow/core/nccl:collective_communicator",
@@ -2151,6 +2152,8 @@ tf_cuda_library(
         "//tensorflow/core/profiler/lib:profiler_backends",
         "//tensorflow/core/profiler/lib:traceme_encode",
         "@com_google_absl//absl/container:flat_hash_set",
+        "@local_xla//xla/tsl/framework:serving_device_selector",
+        "@local_xla//xla/tsl/framework:serving_device_selector_policies",
     ],
     alwayslink = 1,
 )
