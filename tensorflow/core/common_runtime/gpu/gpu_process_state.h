@@ -87,15 +87,20 @@ class GPUProcessState {
   // `options` is read on the very first call to this function in the process.
   // After that if you pass in a set of options, they will be ignored.
   //
+  // `stream_id` is the stream group index if multiple stream groups are created
+  // in one device. Different stream groups must use different GPU allocators to
+  // avoid GPU memory confusion across stream groups.
+  //
   // REQUIRES: tf_device_id must be a valid id for a BaseGPUDevice available in
   // the current system environment.  Otherwise returns nullptr.
   virtual Allocator* GetGPUAllocator(
       const GPUOptions& options, tsl::TfDeviceId tf_device_id,
-      size_t total_bytes, const std::vector<tsl::TfDeviceId>& peer_gpu_ids);
+      size_t total_bytes, const std::vector<tsl::TfDeviceId>& peer_gpu_ids,
+      int stream_id = 0);
 
-  Allocator* GetGPUAllocator(tsl::TfDeviceId tf_device_id) {
+  Allocator* GetGPUAllocator(tsl::TfDeviceId tf_device_id, int stream_id = 0) {
     return GetGPUAllocator(/*options=*/{}, tf_device_id, /*total_bytes=*/0,
-                           /*peer_gpu_ids=*/{});
+                           /*peer_gpu_ids=*/{}, stream_id);
   }
 
   int NumGPUAllocators() {
@@ -134,7 +139,8 @@ class GPUProcessState {
   // Returns bus_id for the given GPU id.
   virtual int BusIdForGPU(tsl::TfDeviceId tf_device_id);
 
-  SharedCounter* GPUAllocatorCounter(tsl::TfDeviceId tf_device_id);
+  SharedCounter* GPUAllocatorCounter(tsl::TfDeviceId tf_device_id,
+                                     int stream_id = 0);
 
  protected:
   // GPUProcessState is a singleton that should not normally be deleted except
@@ -172,7 +178,7 @@ class GPUProcessState {
     Allocator* allocator_not_owned;
 #endif  // TF_GPU_USE_PJRT
   };
-  std::vector<AllocatorParts> gpu_allocators_ TF_GUARDED_BY(mu_);
+  std::vector<std::vector<AllocatorParts>> gpu_allocators_ TF_GUARDED_BY(mu_);
   std::vector<std::vector<SubAllocator::Visitor>> gpu_visitors_
       TF_GUARDED_BY(mu_);
 

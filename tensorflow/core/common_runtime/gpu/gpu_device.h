@@ -427,14 +427,14 @@ class BaseGPUDeviceFactory : public DeviceFactory {
                          tsl::TfDeviceId tf_device_id,
                          const DeviceLocality& dev_locality,
                          xla::LocalDeviceState* xla_local_device_state,
-                         Allocator* gpu_allocator,
+                         std::vector<Allocator*>& gpu_allocators,
                          std::vector<std::unique_ptr<Device>>* devices);
 #else
   Status CreateGPUDevice(const SessionOptions& options,
                          const std::string& name_prefix,
                          tsl::TfDeviceId tf_device_id,
                          const DeviceLocality& dev_locality,
-                         Allocator* gpu_allocator,
+                         std::vector<Allocator*>& gpu_allocators,
                          std::vector<std::unique_ptr<Device>>* devices);
 #endif  // TF_GPU_USE_PJRT
 

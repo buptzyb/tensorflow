@@ -584,8 +584,8 @@ Status BaseGPUDevice::Init(const SessionOptions& options) {
       // associated Allocator, with ownership by GPUProcessState.
       // The GPUKernelTracker will use this SharedCounter, instead of
       // owning its own.
-      timing_counter =
-          GPUProcessState::singleton()->GPUAllocatorCounter(tf_device_id_);
+      timing_counter = GPUProcessState::singleton()->GPUAllocatorCounter(
+          tf_device_id_, stream_id_);
       DCHECK(timing_counter);
     }
     kernel_tracker_.reset(new GPUKernelTracker(
@@ -1763,12 +1763,18 @@ Status BaseGPUDeviceFactory::CreateDevices(
     }
 
     int64_t memory_limit = tf_device_specs[di].memory_limit_bytes;
-    Allocator* gpu_allocator = process_state->GetGPUAllocator(
-        options.config.gpu_options(), tf_device_id, memory_limit, peer_gpu_ids);
-    if (gpu_allocator == nullptr) {
-      return absl::InternalError(absl::StrCat(
-          "Failed to get memory allocator for TF GPU ", tf_device_id.value(),
-          " with ", memory_limit, " bytes of memory."));
+    std::vector<Allocator*> gpu_allocators;
+    int stream_group_count = 1;
+    gpu_allocators.reserve(stream_group_count);
+    for (int i = 0; i < stream_group_count; ++i) {
+      gpu_allocators.push_back(process_state->GetGPUAllocator(
+          options.config.gpu_options(), tf_device_id, memory_limit,
+          peer_gpu_ids, i));
+      if (gpu_allocators.back() == nullptr) {
+        return absl::InternalError(absl::StrCat(
+            "Failed to get memory allocator for TF GPU ", tf_device_id.value(),
+            " with ", memory_limit, " bytes of memory."));
+      }
     }
 
     auto it = device_localities.find(tf_device_id);
@@ -1833,16 +1839,17 @@ Status BaseGPUDeviceFactory::CreateDevices(
       local_device_state = &(pjrt_se_client->device_state(di));
     }
 
-    // CreateGPUDevice sets stream to `gpu_allocator` and preallocates
+    // CreateGPUDevice sets stream to `gpu_allocators` and preallocates
     // devices memory.
-    TF_RETURN_IF_ERROR(CreateGPUDevice(
-        options, name_prefix, tf_device_id,
-        /*dev_locality=*/it->second,
-        /*xla_local_device_state=*/local_device_state, gpu_allocator, devices));
+    TF_RETURN_IF_ERROR(
+        CreateGPUDevice(options, name_prefix, tf_device_id,
+                        /*dev_locality=*/it->second,
+                        /*xla_local_device_state=*/local_device_state,
+                        gpu_allocators, devices));
 
     if (should_create_new_pjrt_client ||
         populate_pjrt_gpu_client_creation_info) {
-      auto gpu_allocator_ptr = std::unique_ptr<Allocator>(gpu_allocator);
+      auto gpu_allocator_ptr = std::unique_ptr<Allocator>(gpu_allocators[0]);
       allocator_id_stream_tuples.emplace_back(
           std::move(gpu_allocator_ptr), local_device_state->compute_stream(), 0,
           tf_device_id.value());
@@ -1951,7 +1958,7 @@ Status BaseGPUDeviceFactory::CreateDevices(
 #else
     TF_RETURN_IF_ERROR(CreateGPUDevice(options, name_prefix, tf_device_id,
                                        /*dev_locality=*/it->second,
-                                       gpu_allocator, devices));
+                                       gpu_allocators, devices));
   }
   return OkStatus();
 #endif  // TF_GPU_USE_PJRT
@@ -1978,13 +1985,15 @@ static string GetShortDeviceDescription(
 Status BaseGPUDeviceFactory::CreateGPUDevice(
     const SessionOptions& options, const string& name_prefix,
     tsl::TfDeviceId tf_device_id, const DeviceLocality& dev_locality,
-    xla::LocalDeviceState* xla_local_device_state, Allocator* gpu_allocator,
+    xla::LocalDeviceState* xla_local_device_state,
+    std::vector<Allocator*>& gpu_allocators,
     std::vector<std::unique_ptr<Device>>* devices) {
 #else
 Status BaseGPUDeviceFactory::CreateGPUDevice(
     const SessionOptions& options, const string& name_prefix,
     tsl::TfDeviceId tf_device_id, const DeviceLocality& dev_locality,
-    Allocator* gpu_allocator, std::vector<std::unique_ptr<Device>>* devices) {
+    std::vector<Allocator*>& gpu_allocators,
+    std::vector<std::unique_ptr<Device>>* devices) {
 #endif  // TF_GPU_USE_PJRT
   CHECK_GE(tf_device_id.value(), 0);
   const string device_name =
@@ -2004,34 +2013,39 @@ Status BaseGPUDeviceFactory::CreateGPUDevice(
   }
   auto desc = std::move(desc_status).value();
 
-  std::optional<AllocatorStats> stats = gpu_allocator->GetStats();
+  CHECK(gpu_allocators.size() == 1);
+  for (size_t i = 0; i < gpu_allocators.size(); ++i) {
+    std::optional<AllocatorStats> stats = gpu_allocators[i]->GetStats();
 
-  // 'memory_limit' is the required memory size, but if the allocator with
-  // given tf_device_id was created before, we'll use it instead of creating a
-  // new one (as TF gpu device is a shared resource), in which case the actual
-  // memory limit represented by 'stats.bytes_limit' used by that allocator
-  // may be different (which should be an error).
-  //
-  // TODO(laigd): report error if memory_limit doesn't match
-  // stats->bytes_limit.
-  int64_t bytes_limit = (stats && stats->bytes_limit) ? *stats->bytes_limit : 0;
-  std::unique_ptr<BaseGPUDevice> gpu_device = CreateGPUDevice(
-      options, device_name, static_cast<Bytes>(bytes_limit), dev_locality,
-      tf_device_id, GetShortDeviceDescription(platform_device_id, *desc),
-      gpu_allocator, ProcessState::singleton()->GetCPUAllocator(numa_node));
-  LOG(INFO) << "Created device " << device_name << " with "
-            << (bytes_limit >> 20) << " MB memory: " << " -> "
-            << GetShortDeviceDescription(platform_device_id, *desc);
+    // 'memory_limit' is the required memory size, but if the allocator with
+    // given tf_device_id was created before, we'll use it instead of creating a
+    // new one (as TF gpu device is a shared resource), in which case the actual
+    // memory limit represented by 'stats.bytes_limit' used by that allocator
+    // may be different (which should be an error).
+    //
+    // TODO(laigd): report error if memory_limit doesn't match
+    // stats->bytes_limit.
+    int64_t bytes_limit =
+        (stats && stats->bytes_limit) ? *stats->bytes_limit : 0;
+    std::unique_ptr<BaseGPUDevice> gpu_device = CreateGPUDevice(
+        options, device_name, static_cast<Bytes>(bytes_limit), dev_locality,
+        tf_device_id, GetShortDeviceDescription(platform_device_id, *desc),
+        gpu_allocators[i],
+        ProcessState::singleton()->GetCPUAllocator(numa_node));
+    LOG(INFO) << "Created device " << device_name << " with "
+              << (bytes_limit >> 20) << " MB memory: " << " -> "
+              << GetShortDeviceDescription(platform_device_id, *desc);
 #ifdef TF_GPU_USE_PJRT
-  TF_RETURN_IF_ERROR(gpu_device->Init(options, xla_local_device_state));
+    TF_RETURN_IF_ERROR(gpu_device->Init(options, xla_local_device_state));
 #else
-  TF_RETURN_IF_ERROR(gpu_device->Init(options));
+    TF_RETURN_IF_ERROR(gpu_device->Init(options));
 #endif  // TF_GPU_USE_PJRT
 
-  gpu_allocator->SetStreamAndPreallocateMemory(
-      gpu_device->compute_stream()->platform_specific_handle().stream);
+    gpu_allocators[i]->SetStreamAndPreallocateMemory(
+        gpu_device->compute_stream()->platform_specific_handle().stream);
 
-  devices->push_back(std::move(gpu_device));
+    devices->push_back(std::move(gpu_device));
+  }
   return OkStatus();
 }
 
